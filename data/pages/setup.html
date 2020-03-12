@@ -1,32 +1,87 @@
 <!DOCTYPE html>
 <html>
 <head>
-	<title>SmartGarden</title>
+  <title>Setup | SmartGarden</title>
 
-	<link rel="stylesheet" type="text/css" href="/public/lib/bootstrap.min.css">
+  <!-- Bootstrap -->
+  <link rel="stylesheet" type="text/css" href="/public/lib/bootstrap.min.css">
 
-	<link rel="stylesheet" type="text/css" href="/public/css/design.css">
+  <!-- Custom design -->
+  <link rel="stylesheet" type="text/css" href="/public/css/design.css">
+
+  <!-- <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/4.1.3/css/bootstrap.min.css"> -->
 </head>
 <body>
-<div class="container">
-  <h1>Smart Garden</h1>
-  <form id="form" action="/settings" method="POST">
-    <div class="form-group">
-      <label><strong>SSID</strong></label>
-      <input type="text" name="ssid" class="form-control">
-    </div>
-    <div class="form-group">
-      <label><strong>Password</strong></label>
-      <input type="password" name="pass" class="form-control">
-    </div>
-    <button class="btn btn-info" type="submit">Save</button>
-  </form>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <a class="navbar-brand" href="#">SmartGarden</a>
+    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarSupportedContent"
+      aria-controls="navbarSupportedContent" aria-expanded="false" aria-label="Toggle navigation">
+      <span class="navbar-toggler-icon"></span>
+    </button>
 
-  <div id="msg" class="alert alert-info mt-3 hidden" role="alert">
-    Updating network...
+    <div class="collapse navbar-collapse" id="navbarSupportedContent">
+      <ul class="navbar-nav mr-auto">
+        <li class="nav-item">
+          <a class="nav-link" href="/">Home</a>
+        </li>
+        <li class="nav-item active">
+          <a class="nav-link" href="#">Settings <span class="sr-only">(current)</span></a>
+        </li>
+      </ul>
+    </div>
+  </nav>
+
+  <div class="container mt-5 offset-lg-4 col-lg-4 offset-md-2 col-md-8 offset-sm-1 col-sm-10 col-xs-12">
+    <h1 class="mb-3">Setup</h1>
+
+    <form id="form" action="/settings" method="POST">
+      <!-- WiFi SSID -->
+      <div class="form-group">
+        <label><strong>SSID:</strong></label>
+        <input type="text" name="ssid" class="form-control" placeholder="SSID">
+      </div>
+
+      <!-- WiFi Password -->
+      <div class="form-group">
+        <label><strong>Password:</strong></label>
+        <input type="password" name="pass" class="form-control" placeholder="Password">
+      </div>
+
+      <!-- MQTT Server -->
+      <div class="form-group">
+        <label><strong>MQTT Server:</strong></label>
+        <input type="text" name="mqtt-server" class="form-control" placeholder="MQTT Server">
+      </div>
+
+      <!-- MQTT Port -->
+      <div class="form-group">
+        <label><strong>MQTT Port:</strong></label>
+        <input type="number" name="mqtt-port" class="form-control" placeholder="MQTT Port" value=1883>
+      </div>
+
+      <!-- MQTT Topic -->
+      <div class="form-group">
+        <label><strong>MQTT Topic:</strong></label>
+        <input type="text" name="mqtt-topic" class="form-control" placeholder="MQTT Topic">
+      </div>
+
+      <!-- Submit -->
+      <button type="submit" class="btn btn-info">Save</button>
+    </form>
+
+    <!-- Notification -->
+    <div id="msg" class="alert alert-info mt-3 hidden" role="alert">
+      Updating network...
+    </div>
   </div>
-</div>
 
-<script src="/public/js/setup.js"></script>
+  <!-- Factory reset -->
+  <div>
+    <form id="factory-reset" action="/reset" method="POST">
+      <button class="btn btn-danger" type="submit">Factory Reset</button>
+    </form>
+  </div>
+
+  <script src="/public/js/setup.js"></script>
 </body>
 </html>
