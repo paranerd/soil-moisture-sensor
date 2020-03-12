@@ -51,12 +51,6 @@ void setup() {
 
 void setupWebserver() {
   // Statics
-  /*server.on("^\\/public\\/(.*)$", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("[GET] /public");
-    String path = request->pathArg(0);
-    request->send(SPIFFS, "/public/" + path, "text/javascript");
-  });*/
-
   server.on("/public/css/design.css", HTTP_GET, [](AsyncWebServerRequest *request){
     Serial.println("[GET] /public/css/design.css");
     request->send(SPIFFS, "/public/css/design.css", "text/css");
@@ -98,22 +92,25 @@ void setupWebserver() {
   });
 
   // Settings
-  server.on("/settings", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(SPIFFS, "/pages/settings.html", "text/html");
-  });
-
-  // Settings
   server.on("/settings", HTTP_POST, [](AsyncWebServerRequest *request) {
     if (request->hasParam("ssid", true)) {
-      Serial.print("request has ssid: ");
-      Serial.println(request->getParam("ssid", true)->value());
       request->getParam("ssid", true)->value().toCharArray(conf.wifiSsid, 100);
     }
 
     if (request->hasParam("pass", true)) {
-      Serial.print("request has pass");
-      Serial.println(request->getParam("pass", true)->value());
       request->getParam("pass", true)->value().toCharArray(conf.wifiPass, 100);
+    }
+
+    if (request->hasParam("mqtt-server", true)) {
+      request->getParam("mqtt-server", true)->value().toCharArray(conf.mqttServer, 100);
+    }
+
+    if (request->hasParam("mqtt-port", true)) {
+      conf.mqttPort = request->getParam("mqtt-port", true)->value().toInt();
+    }
+
+    if (request->hasParam("mqtt-topic", true)) {
+      request->getParam("mqtt-topic", true)->value().toCharArray(conf.mqttTopic, 100);
     }
 
     // Save config
@@ -141,10 +138,9 @@ void setupWebserver() {
 }
 
 void loop() {
-  //moi = readSensor();
-  moi = millis();
+  moi = readSensor();
 
-  //Serial.println(String(moi) + "%");
+  Serial.println(String(moi) + "%");
 
   mqttPublish(moi);
 
@@ -234,7 +230,7 @@ void resetConfig(Config &conf) {
   Serial.println("Resetting config...");
 
   strcpy(conf.mqttServer, "");
-  conf.mqttPort = 0;
+  conf.mqttPort = 1883;
   strcpy(conf.mqttTopic, "");
   strcpy(conf.hostname, "");
   strcpy(conf.wifiSsid, "");
@@ -314,7 +310,7 @@ void mqttReconnect() {
 }
 
 void mqttPublish(int moi) {
-  if (strlen(conf.mqttServer) == 0) {
+  if (!conf.mqttServer || strlen(conf.mqttServer) == 0) {
     return;
   }
 
@@ -330,8 +326,8 @@ void mqttPublish(int moi) {
 int readSensor() {
   moi = analogRead(0);
 
-  moistMin = min(250, moi);
-  moistMax = max(632, moi);
+  moistMin = min(moistMin, moi);
+  moistMax = max(moistMax, moi);
 
   Serial.println(String(moistMin) + " | " + String(moi) + " | " + String(moistMax));
 
