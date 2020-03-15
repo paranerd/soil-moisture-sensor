@@ -140,7 +140,7 @@ void setupWebserver() {
 void loop() {
   moi = readSensor();
 
-  Serial.println(String(moi) + "%");
+  //Serial.println(String(moi) + "%");
 
   mqttPublish(moi);
 
@@ -320,7 +320,19 @@ void mqttPublish(int moi) {
 
   client.loop();
 
-  client.publish(conf.mqttTopic, String(moi).c_str());
+  DynamicJsonBuffer jsonBuffer;
+  JsonObject& msg = jsonBuffer.createObject();
+
+  msg["moisture"] = moi;
+  msg["battery"] = 100;
+
+  char msgBuffer[100];
+  msg.printTo(msgBuffer, sizeof(msgBuffer));
+  Serial.println(msgBuffer);
+
+  // msg = String(moi).c_str();
+
+  client.publish(conf.mqttTopic, msgBuffer);
 }
 
 int readSensor() {
