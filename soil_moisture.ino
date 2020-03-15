@@ -81,7 +81,7 @@ void setupWebserver() {
       request->redirect("/setup");
     }
     else {
-      request->send(SPIFFS, "/pages/index.html", "text/html");
+      request->send(SPIFFS, "/pages/setup.html", "text/html");
     }
   });
 
@@ -111,6 +111,7 @@ void setupWebserver() {
 
     if (request->hasParam("mqtt-topic", true)) {
       request->getParam("mqtt-topic", true)->value().toCharArray(conf.mqttTopic, 100);
+      request->getParam("mqtt-topic", true)->value().toCharArray(conf.hostname, 100);
     }
 
     // Save config
