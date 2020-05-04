@@ -12,9 +12,18 @@ AsyncWebServer server(80);
 
 char* getHostname();
 
-int moi = 0;
-int moistMin = 250;
-int moistMax = 632;
+int moisture = 0;
+int moistureMin = 250;
+int moistureMax = 632;
+
+// Wake up counter
+int wakeUpCounter = -1;
+
+// Deep Sleep duration
+const int SLEEP_TIME_MIN = 30;
+
+// Send data every x * SLEEP_TIME_MIN
+const int SEND_FREQUENCY = 4;
 
 struct Config {
   char hostname[100];
@@ -28,25 +37,43 @@ struct Config {
 struct Config conf;
 
 void setup() {
-  delay(1000);
+  Serial.println("Setup");
   Serial.begin(115200);
 
-  // Load config
-  loadConfig(conf);
+  if (wakeUpCounter % SEND_FREQUENCY == 0) {
+    // Prevent integer overflow
+    wakeUpCounter = 0;
 
-  // Setup WiFi
-  setupWifi(conf);
+    // Load config
+    loadConfig(conf);
 
-  // Setup webserver
-  setupWebserver();
+    // Setup WiFi
+    setupWifi(conf);
 
-  if (strlen(conf.mqttServer) > 0) {
-    Serial.println("Connecting to MQTT:");
-    Serial.println(conf.mqttServer);
-    Serial.println(strlen(conf.mqttServer));
-    // Connect to MQTT broker
-    client.setServer(conf.mqttServer, conf.mqttPort);
+    // Setup webserver
+    setupWebserver();
+
+    if (strlen(conf.mqttServer) > 0) {
+      Serial.println("Connecting to MQTT:");
+      Serial.println(conf.mqttServer);
+      Serial.println(strlen(conf.mqttServer));
+
+      // Connect to MQTT broker
+      client.setServer(conf.mqttServer, conf.mqttPort);
+
+      moisture = readSensor();
+
+      mqttPublish(moisture);
+
+      delay(1000);
+    }
   }
+
+  // Increase wake up counter
+  wakeUpCounter++;
+
+  Serial.println("Going to sleep...");
+  ESP.deepSleep(SLEEP_TIME_MIN * 60 * 1000 * 1000);
 }
 
 void setupWebserver() {
@@ -139,20 +166,18 @@ void setupWebserver() {
 }
 
 void loop() {
-  moi = readSensor();
+  /*moisture = readSensor();
 
-  //Serial.println(String(moi) + "%");
+  //Serial.println(String(moisture) + "%");
 
-  mqttPublish(moi);
+  mqttPublish(moisture);
 
-  delay(1000);
+  delay(1000);*/
 }
 
 void loadConfig(Config &conf) {
   char theHostname[100];
   setHostname(theHostname);
-  
-  //const char* theHostname = "smartgarden-1234"; //getHostname();
 
   Serial.print("char* hostname = ");
   Serial.println(theHostname);
@@ -258,7 +283,7 @@ void setHostname(char* hostname) {
         int random = rand() % (9999 + 1 - 1000) + 1000;
         char randomBuffer[4];
         sprintf(randomBuffer, "%d", random);
-        
+
         strcat(hostname, randomBuffer);
 }
 
@@ -310,7 +335,7 @@ void mqttReconnect() {
   }
 }
 
-void mqttPublish(int moi) {
+void mqttPublish(int moisture) {
   if (!conf.mqttServer || strlen(conf.mqttServer) == 0) {
     return;
   }
@@ -324,28 +349,27 @@ void mqttPublish(int moi) {
   DynamicJsonBuffer jsonBuffer;
   JsonObject& msg = jsonBuffer.createObject();
 
-  msg["moisture"] = moi;
+  msg["moisture"] = moisture;
   msg["battery"] = 100;
 
   char msgBuffer[100];
   msg.printTo(msgBuffer, sizeof(msgBuffer));
   Serial.println(msgBuffer);
 
-  // msg = String(moi).c_str();
+  Serial.println("MQTT topic: ");
+  Serial.println(conf.mqttTopic);
 
   client.publish(conf.mqttTopic, msgBuffer);
 }
 
 int readSensor() {
-  moi = analogRead(0);
+  moisture = analogRead(0);
 
-  moistMin = min(moistMin, moi);
-  moistMax = max(moistMax, moi);
+  moistureMin = min(moistureMin, moisture);
+  moistureMax = max(moistureMax, moisture);
 
-  Serial.println(String(moistMin) + " | " + String(moi) + " | " + String(moistMax));
-
-  int G = moistMax - moistMin;
-  int W = moi - moistMin;
+  int G = moistureMax - moistureMin;
+  int W = moisture - moistureMin;
   float p = (100.0 * W) / G;
 
   return 100.0 - p;
