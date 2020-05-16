@@ -1,3 +1,6 @@
+extern "C" {
+  #include "user_interface.h"
+}
 #include <FS.h>
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
@@ -10,14 +13,12 @@ PubSubClient client(espClient);
 
 AsyncWebServer server(80);
 
-char* getHostname();
+#define RTC_USER_MEMORY_START 65;
+#define RTC_USER_MEMORY_LEN 127;
+#define HOSTNAME_PREFIX "smartgarden-"
 
-int moisture = 0;
-int moistureMin = 250;
-int moistureMax = 632;
-
-// Wake up counter
-int wakeUpCounter = -1;
+const int MOISTURE_MIN_DEFAULT = 250;
+const int MOISTURE_MAX_DEFAULT = 632;
 
 // Deep Sleep duration
 const int SLEEP_TIME_MIN = 30;
@@ -32,79 +33,119 @@ struct Config {
   char mqttServer[16];
   int mqttPort;
   char mqttTopic[100];
+  int moistureMin;
+  int moistureMax;
 };
 
 struct Config conf;
 
+typedef struct {
+  int battery;
+  int wakeUpCounter;
+} rtcStore;
+
+rtcStore rtcMem;
+
+/**
+ * Write to RTC user memory
+ *
+ * @param inVal
+ * @param offset
+ */
+void writeRtc(rtcStore *inVal, int offset = 0) {
+  offset += RTC_USER_MEMORY_START;
+  int buckets = sizeof(*inVal) / 4;
+  if (buckets == 0) buckets = 1;
+
+  system_rtc_mem_write(offset, inVal, buckets * 4);
+}
+
+/**
+ * Read from RTC user memory
+ *
+ * @param inVal
+ * @param offset
+ */
+void readRtc(rtcStore *inVal, int offset = 0) {
+  offset += RTC_USER_MEMORY_START;
+
+  system_rtc_mem_read(offset, inVal, sizeof(*inVal));
+}
+
+/**
+ * Setup
+ */
 void setup() {
-  Serial.println("Setup");
   Serial.begin(115200);
+  Serial.println();
+  Serial.println("Setup");
 
-  if (wakeUpCounter % SEND_FREQUENCY == 0) {
-    // Prevent integer overflow
-    wakeUpCounter = 0;
+  // Load config
+  readConfig();
 
-    // Load config
-    loadConfig(conf);
+  // Load wake up counter
+  readRtc(&rtcMem);
 
+  // Sensor not set up
+  if (!conf.wifiSsid || strlen(conf.wifiSsid) == 0) {
     // Setup WiFi
-    setupWifi(conf);
+    setupWifi();
 
     // Setup webserver
     setupWebserver();
 
-    if (strlen(conf.mqttServer) > 0) {
-      Serial.println("Connecting to MQTT:");
-      Serial.println(conf.mqttServer);
-      Serial.println(strlen(conf.mqttServer));
+    return;
+  }
+  // Sensor set up and send cycle
+  else if (strlen(conf.mqttServer) > 0 && rtcMem.wakeUpCounter % SEND_FREQUENCY == 0) {
+    // Prevent integer overflow
+    rtcMem.wakeUpCounter = 0;
 
-      // Connect to MQTT broker
-      client.setServer(conf.mqttServer, conf.mqttPort);
+    // Setup WiFi
+    setupWifi();
 
-      moisture = readSensor();
+    // Connect to MQTT broker
+    client.setServer(conf.mqttServer, conf.mqttPort);
 
-      mqttPublish(moisture);
+    // Read sensor
+    float moistureLevel = readSensor();
 
-      delay(1000);
-    }
+    // Publish sensor data
+    mqttPublish(moistureLevel);
+
+    // Precaution
+    delay(100);
   }
 
   // Increase wake up counter
-  wakeUpCounter++;
+  rtcMem.wakeUpCounter++;
+  writeRtc(&rtcMem);
 
+  // Enter deep sleep
   Serial.println("Going to sleep...");
   ESP.deepSleep(SLEEP_TIME_MIN * 60 * 1000 * 1000);
 }
 
+/**
+ * Setup webserver
+ */
 void setupWebserver() {
   // Statics
   server.on("/public/css/design.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("[GET] /public/css/design.css");
     request->send(SPIFFS, "/public/css/design.css", "text/css");
   });
 
   server.on("/public/lib/bootstrap.min.css", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("[GET] /public/lib/bootstrap.min.css");
-
-    if (SPIFFS.exists("/public/lib/bootstrap.min.css")) {
-      Serial.println("Bootstrap exists!");
-    }
-    else {
-      Serial.println("Bootstrap does not exist?!");
-    }
-
     request->send(SPIFFS, "/public/lib/bootstrap.min.css", "text/css");
   });
 
   server.on("/public/js/setup.js", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("[GET] /public/js/setup.js");
     request->send(SPIFFS, "/public/js/setup.js", "text/javascript");
   });
 
   // Root
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("[GET] /");
-    if (strlen(conf.wifiSsid) == 0) {
+    if (!conf.wifiSsid || strlen(conf.wifiSsid) == 0) {
       request->redirect("/setup");
     }
     else {
@@ -114,7 +155,6 @@ void setupWebserver() {
 
   // Setup
   server.on("/setup", HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("[GET] /setup");
     request->send(SPIFFS, "/pages/setup.html", "text/html");
   });
 
@@ -138,14 +178,13 @@ void setupWebserver() {
 
     if (request->hasParam("mqtt-topic", true)) {
       request->getParam("mqtt-topic", true)->value().toCharArray(conf.mqttTopic, 100);
-      request->getParam("mqtt-topic", true)->value().toCharArray(conf.hostname, 100);
     }
 
     // Save config
-    saveConfig(conf);
+    writeConfig();
 
     // Reconnect WiFi
-    setupWifi(conf);
+    setupWifi();
 
     request->send(200, "text/plain", "message received");
   });
@@ -153,10 +192,10 @@ void setupWebserver() {
   // Factory Reset
   server.on("/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
     // Reset config
-    resetConfig(conf);
+    resetConfig();
 
     // Reconnect WiFi
-    setupWifi(conf);
+    setupWifi();
 
     request->send(200, "text/plain", "Config reset.");
   });
@@ -165,22 +204,17 @@ void setupWebserver() {
   server.begin();
 }
 
-void loop() {
-  /*moisture = readSensor();
+/**
+ * Loop
+ */
+void loop() {}
 
-  //Serial.println(String(moisture) + "%");
-
-  mqttPublish(moisture);
-
-  delay(1000);*/
-}
-
-void loadConfig(Config &conf) {
-  char theHostname[100];
+/**
+ * Load config from SPIFFS
+ */
+void readConfig() {
+  char theHostname[20];
   setHostname(theHostname);
-
-  Serial.print("char* hostname = ");
-  Serial.println(theHostname);
 
   if (SPIFFS.begin()) {
     if (SPIFFS.exists("/config.json")) {
@@ -195,19 +229,19 @@ void loadConfig(Config &conf) {
         DynamicJsonBuffer jsonBuffer;
         JsonObject& json = jsonBuffer.parseObject(buf.get());
         json.printTo(Serial);
-
-        Serial.print("Hostname: ");
-        Serial.println(theHostname);
+        Serial.println();
 
         strcpy(conf.mqttServer, json["mqtt_server"] | "");
         conf.mqttPort = json.get<int>("mqtt_port") | 1883;
         strcpy(conf.mqttTopic, json["mqtt_topic"] | theHostname);
         strcpy(conf.hostname, json["hostname"] | theHostname);
-        strcpy(conf.wifiSsid, json["wifiSsid"] | "");
-        strcpy(conf.wifiPass, json["wifiPass"] | "");
+        strcpy(conf.wifiSsid, json["wifi_ssid"] | "");
+        strcpy(conf.wifiPass, json["wifi_pass"] | "");
+        conf.moistureMin = json.get<int>("moisture_min") | MOISTURE_MIN_DEFAULT;
+        conf.moistureMax = json.get<int>("moisture_max") | MOISTURE_MAX_DEFAULT;
 
         if (json.success()) {
-          Serial.println("\n Parsed JSON");
+          Serial.println("Parsed JSON");
           return;
         }
       }
@@ -220,15 +254,15 @@ void loadConfig(Config &conf) {
     Serial.println("[ERROR] Failed to mount file system");
   }
 
-  Serial.print("Did set hostname to: ");
-  Serial.println(theHostname);
-
   strcpy(conf.mqttServer, "");
   strcpy(conf.mqttTopic, theHostname);
   strcpy(conf.hostname, theHostname);
 }
 
-void saveConfig(const Config &conf) {
+/**
+ * Save config to SPIFFS
+ */
+void writeConfig() {
   Serial.println("Saving config...");
   DynamicJsonBuffer jsonBuffer;
   JsonObject& json = jsonBuffer.createObject();
@@ -237,8 +271,10 @@ void saveConfig(const Config &conf) {
   json["mqtt_port"] = conf.mqttPort;
   json["mqtt_topic"] = conf.mqttTopic;
   json["hostname"] = conf.hostname;
-  json["wifiSsid"] = conf.wifiSsid;
-  json["wifiPass"] = conf.wifiPass;
+  json["wifi_ssid"] = conf.wifiSsid;
+  json["wifi_pass"] = conf.wifiPass;
+  json["moisture_min"] = conf.moistureMin;
+  json["moisture_max"] = conf.moistureMax;
 
   File configFile = SPIFFS.open("/config.json", "w");
 
@@ -252,7 +288,10 @@ void saveConfig(const Config &conf) {
   configFile.close();
 }
 
-void resetConfig(Config &conf) {
+/**
+ * Delete all data from config in SPIFFS
+ */
+void resetConfig() {
   Serial.println("Resetting config...");
 
   strcpy(conf.mqttServer, "");
@@ -262,35 +301,32 @@ void resetConfig(Config &conf) {
   strcpy(conf.wifiSsid, "");
   strcpy(conf.wifiPass, "");
 
-  saveConfig(conf);
+  writeConfig();
 }
 
-char* getHostname() {
-  char hostname[100];
-  int id = (rand() % 9999 + 1000);
-  sprintf(hostname, "%s%d", "smartgarden-", id);
-
-  Serial.print("getHostname: ");
-  Serial.println(hostname);
-
-  return hostname;
-}
-
+/**
+ * Generate random hostname
+ *
+ * @return char[]
+ */
 void setHostname(char* hostname) {
-        srand(time(NULL));
-        strcpy(hostname, "smartgarden-");
+  srand(time(NULL));
+  strcpy(hostname, HOSTNAME_PREFIX);
 
-        int random = rand() % (9999 + 1 - 1000) + 1000;
-        char randomBuffer[4];
-        sprintf(randomBuffer, "%d", random);
+  int random = rand() % (9999 + 1 - 1000) + 1000;
+  char randomBuffer[4];
+  sprintf(randomBuffer, "%d", random);
 
-        strcat(hostname, randomBuffer);
+  strcat(hostname, randomBuffer);
 }
 
-void setupWifi(Config &conf) {
+/**
+ * Setup WiFi
+ */
+void setupWifi() {
   WiFi.softAPdisconnect(true);
   WiFi.disconnect();
-  delay(1000);
+  delay(100);
 
   if (strlen(conf.wifiSsid) > 0) {
     WiFi.hostname(conf.hostname);
@@ -299,22 +335,28 @@ void setupWifi(Config &conf) {
 
     unsigned long startTime = millis();
     while (WiFi.status() != WL_CONNECTED) {
-      delay(500);
+      delay(100);
       Serial.print(".");
       if ((unsigned long)(millis() - startTime) >= 5000) break;
     }
   }
 
   if (WiFi.status() != WL_CONNECTED) {
+    char hostname[20];
+    setHostname(hostname);
     Serial.println("Setting up softAP");
-    Serial.println(conf.hostname);
+    Serial.println(hostname);
+
     WiFi.mode(WIFI_AP);
-    WiFi.softAP(conf.hostname);
+    WiFi.softAP(hostname);
   }
 
   WiFi.printDiag(Serial);
 }
 
+/**
+ * Reconnect to MQTT server
+ */
 void mqttReconnect() {
   // Loop until we're reconnected
   while (!client.connected()) {
@@ -325,17 +367,24 @@ void mqttReconnect() {
       Serial.println(" connected.");
     }
     else {
-      Serial.print(" failed, rc=");
+      Serial.print(" failed for hostname ");
+      Serial.print(conf.hostname);
+      Serial.print(", rc=");
       Serial.print(client.state());
-      Serial.println(" - Try again in 5 seconds");
+      Serial.println(" - Try again in 2 seconds");
 
       // Wait 5 seconds before retrying
-      delay(5000);
+      delay(2000);
     }
   }
 }
 
-void mqttPublish(int moisture) {
+/**
+ * Publish MQTT message
+ *
+ * @param moistureLevel
+ */
+void mqttPublish(float moistureLevel) {
   if (!conf.mqttServer || strlen(conf.mqttServer) == 0) {
     return;
   }
@@ -349,24 +398,39 @@ void mqttPublish(int moisture) {
   DynamicJsonBuffer jsonBuffer;
   JsonObject& msg = jsonBuffer.createObject();
 
-  msg["moisture"] = moisture;
+  msg["moisture"] = moistureLevel;
   msg["battery"] = 100;
 
   char msgBuffer[100];
   msg.printTo(msgBuffer, sizeof(msgBuffer));
   Serial.println(msgBuffer);
 
-  Serial.println("MQTT topic: ");
-  Serial.println(conf.mqttTopic);
-
   client.publish(conf.mqttTopic, msgBuffer);
 }
 
-int readSensor() {
-  moisture = analogRead(0);
+/**
+ * Read moisture sensor
+ *
+ * @return float
+ */
+float readSensor() {
+  int moisture = analogRead(0);
 
-  moistureMin = min(moistureMin, moisture);
-  moistureMax = max(moistureMax, moisture);
+  int moistureMin = min(moistureMin, moisture);
+  int moistureMax = max(moistureMax, moisture);
+
+  // Update config if necessary
+  if (moistureMin < conf.moistureMin) {
+    conf.moistureMin = moistureMin;
+
+    writeConfig();
+  }
+
+  if (moistureMax > conf.moistureMax) {
+    conf.moistureMax = moistureMax;
+
+    writeConfig();
+  }
 
   int G = moistureMax - moistureMin;
   int W = moisture - moistureMin;
