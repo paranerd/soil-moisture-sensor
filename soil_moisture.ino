@@ -1,3 +1,5 @@
+// https://github.com/esp8266/Arduino/blob/master/libraries/esp8266/examples/RTCUserMemory/RTCUserMemory.ino
+
 extern "C" {
   #include "user_interface.h"
 }
@@ -9,7 +11,7 @@ extern "C" {
 #include <PubSubClient.h>
 
 WiFiClient espClient;
-PubSubClient client(espClient);
+PubSubClient mqttClient(espClient);
 
 AsyncWebServer server(80);
 
@@ -17,8 +19,8 @@ AsyncWebServer server(80);
 #define RTC_USER_MEMORY_LEN 127;
 #define HOSTNAME_PREFIX "smartgarden-"
 
-const int MOISTURE_MIN_DEFAULT = 250;
-const int MOISTURE_MAX_DEFAULT = 632;
+const int MOISTURE_MIN_DEFAULT = 0;
+const int MOISTURE_MAX_DEFAULT = 0;
 
 // Deep Sleep duration
 const int SLEEP_TIME_MIN = 30;
@@ -26,11 +28,15 @@ const int SLEEP_TIME_MIN = 30;
 // Send data every x * SLEEP_TIME_MIN
 const int SEND_FREQUENCY = 4;
 
+// Uptime
+const int MAX_UPTIME = 60 * 3;
+int uptime = 0;
+
 struct Config {
   char hostname[100];
   char wifiSsid[100];
   char wifiPass[100];
-  char mqttServer[16];
+  char mqttServer[100];
   int mqttPort;
   char mqttTopic[100];
   int moistureMin;
@@ -41,7 +47,11 @@ struct Config conf;
 
 typedef struct {
   int battery;
+  int batteryValidator;
   int wakeUpCounter;
+  int wakeUpCounterValidator;
+  bool initialized;
+  bool initializedValidator;
 } rtcStore;
 
 rtcStore rtcMem;
@@ -72,6 +82,20 @@ void readRtc(rtcStore *inVal, int offset = 0) {
   system_rtc_mem_read(offset, inVal, sizeof(*inVal));
 }
 
+void initRtc(rtcStore *inVal) {
+  if (inVal->battery != inVal->batteryValidator) {
+    inVal->battery = 100;
+  }
+
+  if (inVal->wakeUpCounter != inVal->wakeUpCounterValidator) {
+    inVal->wakeUpCounter = 0;
+  }
+
+  if (inVal->initialized != inVal->initializedValidator) {
+    inVal->initialized = false;
+  }
+}
+
 /**
  * Setup
  */
@@ -83,16 +107,24 @@ void setup() {
   // Load config
   readConfig();
 
-  // Load wake up counter
+  // Load RTC memory
   readRtc(&rtcMem);
 
+  // Init RTC memory
+  initRtc(&rtcMem);
+
   // Sensor not set up
-  if (!conf.wifiSsid || strlen(conf.wifiSsid) == 0) {
+  if ((!rtcMem.initialized && !rtcMem.initializedValidator) || !conf.wifiSsid || strlen(conf.wifiSsid) == 0) {
     // Setup WiFi
     setupWifi();
 
     // Setup webserver
     setupWebserver();
+
+    // Set initialized to true
+    rtcMem.initialized = true;
+    rtcMem.initializedValidator = true;
+    writeRtc(&rtcMem);
 
     return;
   }
@@ -100,12 +132,10 @@ void setup() {
   else if (strlen(conf.mqttServer) > 0 && rtcMem.wakeUpCounter % SEND_FREQUENCY == 0) {
     // Prevent integer overflow
     rtcMem.wakeUpCounter = 0;
+    rtcMem.wakeUpCounterValidator = 0;
 
     // Setup WiFi
     setupWifi();
-
-    // Connect to MQTT broker
-    client.setServer(conf.mqttServer, conf.mqttPort);
 
     // Read sensor
     float moistureLevel = readSensor();
@@ -119,6 +149,7 @@ void setup() {
 
   // Increase wake up counter
   rtcMem.wakeUpCounter++;
+  rtcMem.wakeUpCounterValidator++;
   writeRtc(&rtcMem);
 
   // Enter deep sleep
@@ -207,7 +238,19 @@ void setupWebserver() {
 /**
  * Loop
  */
-void loop() {}
+void loop() {
+  delay(1000);
+  uptime += 1;
+
+  if (uptime >= MAX_UPTIME) {
+    // Enter deep sleep
+    Serial.println("Going to sleep from loop...");
+    ESP.deepSleep(SLEEP_TIME_MIN * 60 * 1000 * 1000);
+  }
+  else {
+    Serial.println(String(uptime) + " < " + String(MAX_UPTIME));
+  }
+}
 
 /**
  * Load config from SPIFFS
@@ -253,6 +296,9 @@ void readConfig() {
   else {
     Serial.println("[ERROR] Failed to mount file system");
   }
+
+  Serial.print("Did set hostname to: ");
+  Serial.println(theHostname);
 
   strcpy(conf.mqttServer, "");
   strcpy(conf.mqttTopic, theHostname);
@@ -359,18 +405,18 @@ void setupWifi() {
  */
 void mqttReconnect() {
   // Loop until we're reconnected
-  while (!client.connected()) {
+  while (!mqttClient.connected()) {
     Serial.print("Attempting MQTT connection...");
 
     // Attempt to connect
-    if (client.connect(conf.hostname)) {
+    if (mqttClient.connect(conf.hostname)) {
       Serial.println(" connected.");
     }
     else {
       Serial.print(" failed for hostname ");
       Serial.print(conf.hostname);
       Serial.print(", rc=");
-      Serial.print(client.state());
+      Serial.print(mqttClient.state());
       Serial.println(" - Try again in 2 seconds");
 
       // Wait 5 seconds before retrying
@@ -385,15 +431,19 @@ void mqttReconnect() {
  * @param moistureLevel
  */
 void mqttPublish(float moistureLevel) {
+  Serial.println("MQTT publish...");
   if (!conf.mqttServer || strlen(conf.mqttServer) == 0) {
     return;
   }
 
-  if (!client.connected()) {
+  // Set server and port
+  mqttClient.setServer(conf.mqttServer, conf.mqttPort);
+
+  if (!mqttClient.connected()) {
     mqttReconnect();
   }
 
-  client.loop();
+  mqttClient.loop();
 
   DynamicJsonBuffer jsonBuffer;
   JsonObject& msg = jsonBuffer.createObject();
@@ -405,7 +455,7 @@ void mqttPublish(float moistureLevel) {
   msg.printTo(msgBuffer, sizeof(msgBuffer));
   Serial.println(msgBuffer);
 
-  client.publish(conf.mqttTopic, msgBuffer);
+  mqttClient.publish(conf.mqttTopic, msgBuffer);
 }
 
 /**
@@ -414,10 +464,18 @@ void mqttPublish(float moistureLevel) {
  * @return float
  */
 float readSensor() {
-  int moisture = analogRead(0);
+  int moisture = analogRead(A0);
+  Serial.print("Reading sensor: ");
+  Serial.println(moisture);
 
-  int moistureMin = min(moistureMin, moisture);
-  int moistureMax = max(moistureMax, moisture);
+  int moistureMin = min(conf.moistureMin, moisture);
+  int moistureMax = max(conf.moistureMax, moisture);
+
+  Serial.print("moistureMin: ");
+  Serial.println(moistureMin);
+
+  Serial.print("moistureMax: ");
+  Serial.println(moistureMax);
 
   // Update config if necessary
   if (moistureMin < conf.moistureMin) {
@@ -436,5 +494,30 @@ float readSensor() {
   int W = moisture - moistureMin;
   float p = (100.0 * W) / G;
 
+  Serial.print("p: ");
+  Serial.println(p);
+
+  float returning = 100.0 - p;
+  Serial.print("Returning: ");
+  Serial.println(returning);
+
   return 100.0 - p;
+}
+
+uint32_t calculateCRC32(const uint8_t *data, size_t length) {
+  uint32_t crc = 0xffffffff;
+  while (length--) {
+    uint8_t c = *data++;
+    for (uint32_t i = 0x80; i > 0; i >>= 1) {
+      bool bit = crc & 0x80000000;
+      if (c & i) {
+        bit = !bit;
+      }
+      crc <<= 1;
+      if (bit) {
+        crc ^= 0x04c11db7;
+      }
+    }
+  }
+  return crc;
 }
