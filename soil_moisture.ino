@@ -19,7 +19,7 @@ AsyncWebServer server(80);
 #define RTC_USER_MEMORY_LEN 127;
 #define HOSTNAME_PREFIX "smartgarden-"
 
-const int MOISTURE_MIN_DEFAULT = 0;
+const int MOISTURE_MIN_DEFAULT = 1024;
 const int MOISTURE_MAX_DEFAULT = 0;
 
 // Deep Sleep duration
@@ -274,17 +274,72 @@ void readConfig() {
         json.printTo(Serial);
         Serial.println();
 
-        strcpy(conf.mqttServer, json["mqtt_server"] | "");
-        conf.mqttPort = json.get<int>("mqtt_port") | 1883;
-        strcpy(conf.mqttTopic, json["mqtt_topic"] | theHostname);
-        strcpy(conf.hostname, json["hostname"] | theHostname);
-        strcpy(conf.wifiSsid, json["wifi_ssid"] | "");
-        strcpy(conf.wifiPass, json["wifi_pass"] | "");
-        conf.moistureMin = json.get<int>("moisture_min") | MOISTURE_MIN_DEFAULT;
-        conf.moistureMax = json.get<int>("moisture_max") | MOISTURE_MAX_DEFAULT;
+        // MQTT server
+        if (json.containsKey("mqtt_server") && strlen(json["mqtt_server"]) > 0) {
+          strcpy(conf.mqttServer, json["mqtt_server"]);
+        }
+        else {
+          strcpy(conf.mqttServer, "");
+        }
+
+        // MQTT port
+        if (json.containsKey("mqtt_port")) {
+          conf.mqttPort = json.get<int>("mqtt_port");
+        }
+        else {
+          conf.mqttPort = 1883;
+        }
+
+        // MQTT topic
+        if (json.containsKey("mqtt_topic") && strlen(json["mqtt_topic"]) > 0) {
+          strcpy(conf.mqttTopic, json["mqtt_topic"]);
+        }
+        else {
+          strcpy(conf.mqttTopic, theHostname);
+        }
+
+        // Hostname
+        if (json.containsKey("hostname") && strlen(json["hostname"]) > 0) {
+          strcpy(conf.hostname, json["hostname"]);
+        }
+        else {
+          strcpy(conf.hostname, theHostname);
+        }
+
+        // WiFi SSID
+        if (json.containsKey("wifi_ssid") && strlen(json["wifi_ssid"]) > 0) {
+          strcpy(conf.wifiSsid, json["wifi_ssid"]);
+        }
+        else {
+          strcpy(conf.wifiSsid, "");
+        }
+
+        // WiFi pass
+        if (json.containsKey("wifi_pass") && strlen(json["wifi_pass"]) > 0) {
+          strcpy(conf.wifiPass, json["wifi_pass"]);
+        }
+        else {
+          strcpy(conf.wifiPass, "");
+        }
+
+        // Moisture min
+        if (json.containsKey("moisture_min")) {
+          conf.moistureMin = json.get<int>("moisture_min");
+        }
+        else {
+          conf.moistureMin = MOISTURE_MIN_DEFAULT;
+        }
+
+        // Moisture max
+        if (json.containsKey("moisture_max")) {
+          conf.moistureMax = json.get<int>("moisture_max");
+        }
+        else {
+          conf.moistureMax = MOISTURE_MAX_DEFAULT;
+        }
 
         if (json.success()) {
-          Serial.println("Parsed JSON");
+          Serial.print("Parsed config.");
           return;
         }
       }
@@ -471,12 +526,6 @@ float readSensor() {
   int moistureMin = min(conf.moistureMin, moisture);
   int moistureMax = max(conf.moistureMax, moisture);
 
-  Serial.print("moistureMin: ");
-  Serial.println(moistureMin);
-
-  Serial.print("moistureMax: ");
-  Serial.println(moistureMax);
-
   // Update config if necessary
   if (moistureMin < conf.moistureMin) {
     conf.moistureMin = moistureMin;
@@ -493,13 +542,7 @@ float readSensor() {
   int G = moistureMax - moistureMin;
   int W = moisture - moistureMin;
   float p = (100.0 * W) / G;
-
-  Serial.print("p: ");
-  Serial.println(p);
-
   float returning = 100.0 - p;
-  Serial.print("Returning: ");
-  Serial.println(returning);
 
   return 100.0 - p;
 }
